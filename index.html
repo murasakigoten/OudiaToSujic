@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>OuDiaToSujic</title>
+</head>
+<body>
+	<h1>OuDiaをSujicに変換するやつ</h1>
+    <p>フォームにOuDiaの.oudファイルの中身をUTF-8でそのままコピーアンドペーストして、変換ボタンを押してください</p>
+    <form name="OuDiaData">
+	    <p>
+	    	<textarea name="textarea" rows="4" cols="40"></textarea>
+	    </p>
+        <p>
+            基本停車時間 単位:秒 59以内 （半角）<br>
+            ダイヤが発時刻のみの場合、入力した秒が引かれた着時刻を生成します。<br>
+            到着時刻がないダイヤに対してのみ有効です。<br>
+            <input type="text" name="stopTime" value="30" size="40">
+        </p>
+        <input type="button" value="時刻表変換" onClick="time();">
+        <input type="button" value="駅変換" onClick="station();">
+    </form>
+
+    <p></p>
+
+    <pre id="output">
+        
+    </pre>
+</body>
+
+<script type="text/javascript">
+
+
+var OuDiaData = [];
+var lastRow;
+var data = new Object();
+var stopTime;
+
+function road(){
+  OuDiaData = document.OuDiaData.textarea.value.split("\n");
+  lastRow = OuDiaData.length;
+  stopTime = document.OuDiaData.stopTime.value;
+}
+
+function time() {
+  road();
+  if ( 0 <= stopTime && stopTime < 60) {
+    dataGet('Eki.');
+    dataGet('Ressyasyubetsu.');
+    dataGet('Ressya.');
+    setEkiJikoku();
+    outputSujicFile( timeStringConnection() );
+  } else {
+    alert("停車時間の入力内容がおかしいです。");
+  }
+}
+function station() {
+  road();
+  dataGet('Eki.');
+  dataGet('Rosen.');
+  outputSujicFile( stationStringConnection() );
+}
+
+function dataGet(sectionTitle) {
+  data[sectionTitle] = [];
+  for ( var i = 0, index = 0; i < lastRow; i++ ) {
+    if ( OuDiaData[i] === sectionTitle ) {
+    data[sectionTitle][index] = {};
+      for ( var j = 0; true; j++ ) {
+        //console.log('OuDiaData: '+ OuDiaData[i+j+1]);
+        if ( OuDiaData[i+j+1] === '.' ) {
+          break;
+        } else {
+          var obj = cutString(OuDiaData[i+j+1], '=');
+          data[sectionTitle][index][obj.before]=obj.after;
+        }
+      }
+      //console.log(index);
+      index++;
+    }
+  }
+}
+
+function setEkiJikoku(){
+  var numOfSta = data['Eki.'].length;
+  for ( var i = 0; i < data['Ressya.'].length; i++ ) {
+    var tmp = data['Ressya.'][i]['EkiJikoku'];
+    var array = [];
+    for ( var j = 0; j < numOfSta; j++ ) {
+      //console.log(tmp);
+      if ( tmp != undefined ) {
+        var position = tmp.indexOf(',');
+        if ( position == -1 ) {
+          position = tmp.length;
+        }
+        array[j] = tmp.substring(0, position);
+        tmp = tmp.substring(position+1, tmp.length+1 );
+      } else {
+        //console.log('undefined');
+        array[j] = '2';
+      }
+    }
+    for ( var j = 0; j < numOfSta; j++ ) {
+      var tmp2 = array[j];
+      array[j] = {};
+      if ( tmp2.indexOf('1') === 0 ) {
+        array[j]['status'] = 'stop';
+        array[j]['time'] = cutString(tmp2, ';').after;
+      } else if ( tmp2.indexOf('2') === 0 ) { //
+        array[j]['status'] = 'pass';
+      } else {
+        array[j]
+        array[j]['status'] = 'nonService';
+      }
+    }
+    data['Ressya.'][i]['EkiJikoku'] = array;
+  }
+}
+
+function cutString(string, key) {
+  var position = string.indexOf(key);
+  var before, after;
+  
+  before = string.substring( 0, position);
+  after = string.substring( position+1, string.length );
+  return {before: before, after: after}
+}
+
+function timeStringConnection() {
+  var string = '';
+  
+  for ( var i = 0; i < data['Ressya.'].length; i++ ) {
+    if ( data['Ressya.'][i]['Syubetsu'] != undefined ) {
+      string = string + '<create class="sujic_trainset">\n'
+      string = string + '  <under class="sujic_schedule_set" name="RG" />\n'
+      string = string + '  <using class="sujic_traintype" name="train_name" type="type" />\n'
+      string = string + '  <data class="x_trainset" name="' + data['Ressya.'][i]['Ressyabangou'] + '">\n'
+      string = string + timeStringConnection2( data['Ressya.'][i]['Houkou'], i , data['Ressyasyubetsu.'][ data['Ressya.'][i]['Syubetsu'] ]['Syubetsumei']);
+      string = string + '  </data>\n</create>\n\n';
+    } else {
+      string = string + '\n';
+    }
+  }
+  return string;
+}
+function timeStringConnection2(bound, i, type){
+  var stationData;
+  if ( bound === 'Kudari' ) {
+    stationData = data['Eki.']
+  } else if ( bound === 'Nobori' ) {
+    stationData = data['Eki.'].reverse();
+  }
+  
+  var string = '';
+  
+  for ( var j = 0; j < stationData.length; j++ ) {
+    if ( data['Ressya.'][i]['EkiJikoku'][j]['status'] === 'stop' ) {
+      var tmp = '    <train_time station="' + stationData[j]['Ekimei'] + '" platform="1" ';
+      if ( data['Ressya.'][i]['EkiJikoku'][j]['time'].indexOf('/')  == -1 ) { //　スラッシュが含まれない場合に、～
+        if( (stationData[j]['Ekijikokukeisiki'] === 'Jikokukeisiki_NoboriChaku') || (stationData[j]['Ekijikokukeisiki'] === 'Jikokukeisiki_KudariChaku') ) { //時刻が上りか下り着の場合は最初の駅であるので、初期駅のため出発のみ
+          string = string + tmp + 'status="DEP" time="' + timeFormat( data['Ressya.'][i]['EkiJikoku'][j]['time'] ) + '" train="' + type + '"/>\n';
+        } else { //時刻が発のみ
+          if ( data['Ressya.'][i]['EkiJikoku'][j-1] != undefined ) { // 前の駅の列車のダイヤが存在している場合に～
+            if ( data['Ressya.'][i]['EkiJikoku'][j-1]['status'] === 'nonService' ) { //その前に電車が運用されていなかった場合は初期駅のため発車だけ
+              string = string + tmp + 'status="DEP" time="' + timeFormat( data['Ressya.'][i]['EkiJikoku'][j]['time'] ) + '" train="' + type + '"/>\n';
+            } else { //前の駅の列車のダイヤが存在している場合は途中駅のため着発を表示
+              string = string + tmp + 'status="ARR" time="' + timeFormat( data['Ressya.'][i]['EkiJikoku'][j]['time'], stopTime) + '" train="' + type + '"/>\n';
+              string = string + tmp + 'status="DEP" time="' + timeFormat (data['Ressya.'][i]['EkiJikoku'][j]['time'] ) + '" train="' + type + '"/>\n';
+            }
+          } else { // 前の駅の列車のダイヤが存在していない場合は、初期駅のため発車だけ
+            string = string + tmp + 'status="ARR" time="' + timeFormat( data['Ressya.'][i]['EkiJikoku'][j]['time'] ) + '" train="' + type + '"/>\n';
+          }
+        }
+      } else if ( data['Ressya.'][i]['EkiJikoku'][j]['time'].indexOf('/') == data['Ressya.'][i]['EkiJikoku'][j]['time'].length-1 ) { // 最後にスラッシュがあった場合は到着駅
+        string = string + tmp + 'status="ARR" time="' + timeFormat( cutString(data['Ressya.'][i]['EkiJikoku'][j]['time'],'/').before ) + '" train="' + type + '"/>\n';
+      } else { //スラッシュが真ん中に含まれているときは着発駅
+        string = string + tmp + 'status="ARR" time="' + timeFormat( cutString(data['Ressya.'][i]['EkiJikoku'][j]['time'],'/').before ) + '" train="' + type + '"/>\n';
+        string = string + tmp + 'status="DEP" time="' + timeFormat( cutString(data['Ressya.'][i]['EkiJikoku'][j]['time'],'/').after ) + '" train="' + type + '"/>\n';
+      }
+    }
+  }
+  
+  return string;
+}
+function timeFormat(time, stopTime_) {
+  //console.log(time);
+  if( time.length == 3 ) {
+    time = '0' + time + '00';
+  } else if (time.length == 4 ) {
+    time = time + '00';
+  } else if ( time.length == 5 ) {
+    time = '0' + time;
+  }
+  if ( stopTime_ != null ){
+    var s = Number(time.substring(4, 6));
+    var m = Number(time.substring(2, 4));
+    var h = Number(time.substring(0, 2));
+    if ( s-stopTime < 0 ) {
+      s = 60 - stopTime_;
+      if ( m-1 < 0 ) {
+        m = 60 - 1;
+        if ( h-1 < 0 ) {
+          h = 24 - 1;
+        } else {
+          h = h - 1;
+        }
+      } else {
+        m = m - 1;
+      }
+    } else {
+      s = s - stopTime_;
+    }
+    time = timeFormat2(h)+timeFormat2(m)+timeFormat2(s);
+  }
+  return time;
+}
+function timeFormat2(time) {
+  time = time + '';
+  if (time.length == 1) {
+    time = '0' + time;
+  }
+  return time;
+}
+
+function stationStringConnection() {
+  var string = '';
+  
+  string = string + '<!-- Stations and platforms -->\n\n'
+  for ( var i = 0; i < data['Eki.'].length; i++ ) {
+    string = string + '<create class="sujic_station">\n';
+    string = string + '  <data name="' + data['Eki.'][i]['Ekimei'] + '" class="x_station">\n';
+    string = string + '    <platforms>\n';
+    string = string + '        <platform class="x_platform" name="1" />\n';
+    string = string + '        <platform class="x_platform" name="E" entrance="true" exit="true" />\n';
+    string = string + '    </platforms>\n';
+    string = string + '    <intratimes>\n';
+    string = string + '        <intratime class="x_intra_sta" from="1" to="E" time="0" />\n';
+    string = string + '        <intratime class="x_intra_sta" from="E" to="1" time="0" />\n';
+    string = string + '    </intratimes>\n';
+    string = string + '  </data>\n';
+    string = string + '</create>\n';
+  }
+  
+  string = string + '\n<!-- Lines -->\n\n';
+  string = string + '<create class="sujic_line">\n';
+  for ( var i = 0; i < data['Eki.'].length; i++ ) {
+    string = string + '  <using class="sujic_station" name="' + data['Eki.'][i]['Ekimei'] + '" type="station" />\n';
+  }
+  string = string + '  <data name="' + data['Rosen.'][0]['Rosenmei'] + '" class="x_line" />\n';
+  string = string + '</create>\n'
+;  return string;
+}
+
+function outputSujicFile(string) {
+  console.log(string);
+  document.getElementById("output").textContent = string;
+}
+
+</script>
+</html>
